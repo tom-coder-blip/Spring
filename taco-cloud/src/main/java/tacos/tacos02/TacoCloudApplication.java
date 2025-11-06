@@ -1,4 +1,4 @@
-package tacos.tacos01;
+package tacos.tacos02;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
