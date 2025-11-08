@@ -1,18 +1,28 @@
 package tacos.tacos03.data;
 
+// This class implements OrderRepository using raw JDBC.
+// It saves orders, tacos, and ingredients into the database and retrieves them by ID.
+// Spring injects JdbcOperations to run SQL queries safely.
+
+// SQL type constants used when building PreparedStatements
 import java.sql.Types;
+// Utility classes for lists, dates, and Optional return values
 import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Optional;
 
-import java.sql.Types; // ✅ used in PreparedStatementCreatorFactory
 import org.springframework.dao.IncorrectResultSizeDataAccessException;
+// Main Spring JDBC helper for running queries
 import org.springframework.jdbc.core.JdbcOperations;
+// Helps build prepared SQL statements
 import org.springframework.jdbc.core.PreparedStatementCreator;
 import org.springframework.jdbc.core.PreparedStatementCreatorFactory;
+// Holds auto-generated primary keys after inserts
 import org.springframework.jdbc.support.GeneratedKeyHolder;
+// Marks this as a data repository bean
 import org.springframework.stereotype.Repository;
+// Makes the save() method run in a single DB transaction
 import org.springframework.transaction.annotation.Transactional;
 
 import tacos.tacos03.IngredientRef;
@@ -22,147 +32,166 @@ import tacos.tacos03.TacoOrder;
 @Repository
 public class JdbcOrderRepository implements OrderRepository {
 
-  private JdbcOperations jdbcOperations;
+    private JdbcOperations jdbcOperations;
 
-  public JdbcOrderRepository(JdbcOperations jdbcOperations) {
-    this.jdbcOperations = jdbcOperations;
-  }
-
-  @Override
-  @Transactional
-  public TacoOrder save(TacoOrder order) {
-    PreparedStatementCreatorFactory pscf =
-      new PreparedStatementCreatorFactory(
-        "insert into Taco_Order "
-        + "(delivery_name, delivery_street, delivery_city, "
-        + "delivery_state, delivery_zip, cc_number, "
-        + "cc_expiration, cc_cvv, placed_at) "
-        + "values (?,?,?,?,?,?,?,?,?)",
-        Types.VARCHAR, Types.VARCHAR, Types.VARCHAR,
-        Types.VARCHAR, Types.VARCHAR, Types.VARCHAR,
-        Types.VARCHAR, Types.VARCHAR, Types.TIMESTAMP
-    );
-    pscf.setReturnGeneratedKeys(true);
-
-    order.setPlacedAt(new Date());
-    PreparedStatementCreator psc =
-        pscf.newPreparedStatementCreator(
-            Arrays.asList(
-                order.getDeliveryName(),
-                order.getDeliveryStreet(),
-                order.getDeliveryCity(),
-                order.getDeliveryState(),
-                order.getDeliveryZip(),
-                order.getCcNumber(),
-                order.getCcExpiration(),
-                order.getCcCVV(),
-                order.getPlacedAt()));
-
-    GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
-    jdbcOperations.update(psc, keyHolder);
-    long orderId = keyHolder.getKey().longValue();
-    order.setId(orderId);
-
-    List<Taco> tacos = order.getTacos();
-    int i=0;
-    for (Taco taco : tacos) {
-      saveTaco(orderId, i++, taco);
+    // Injecting JdbcOperations to run SQL queries
+    public JdbcOrderRepository(JdbcOperations jdbcOperations) {
+        this.jdbcOperations = jdbcOperations;
     }
 
-    return order;
-  }
+    @Override
+    @Transactional
+    public TacoOrder save(TacoOrder order) {
+        // Prepare SQL insert statement for Taco_Order table
+        PreparedStatementCreatorFactory pscf =
+                new PreparedStatementCreatorFactory(
+                        "insert into Taco_Order "
+                                + "(delivery_name, delivery_street, delivery_city, "
+                                + "delivery_state, delivery_zip, cc_number, "
+                                + "cc_expiration, cc_cvv, placed_at) "
+                                + "values (?,?,?,?,?,?,?,?,?)",
+                        Types.VARCHAR, Types.VARCHAR, Types.VARCHAR,
+                        Types.VARCHAR, Types.VARCHAR, Types.VARCHAR,
+                        Types.VARCHAR, Types.VARCHAR, Types.TIMESTAMP
+                );
+        pscf.setReturnGeneratedKeys(true);
 
-  private long saveTaco(Long orderId, int orderKey, Taco taco) {
-    taco.setCreatedAt(new Date());
-      PreparedStatementCreatorFactory pscf =
-              new PreparedStatementCreatorFactory(
-                      "insert into Taco "
-                              + "(name, created_at, taco_order, taco_order_key) "
-                              + "values (?, ?, ?, ?)",
-                      Types.VARCHAR, Types.TIMESTAMP, Types.BIGINT, Types.BIGINT
-              );
-    pscf.setReturnGeneratedKeys(true);
+        // Set the timestamp for when the order was placed
+        order.setPlacedAt(new Date());
 
-    PreparedStatementCreator psc =
-        pscf.newPreparedStatementCreator(
-            Arrays.asList(
-                taco.getName(),
-                taco.getCreatedAt(),
-                orderId,
-                orderKey));
+        // Build the actual prepared statement with values
+        PreparedStatementCreator psc =
+                pscf.newPreparedStatementCreator(
+                        Arrays.asList(
+                                order.getDeliveryName(),
+                                order.getDeliveryStreet(),
+                                order.getDeliveryCity(),
+                                order.getDeliveryState(),
+                                order.getDeliveryZip(),
+                                order.getCcNumber(),
+                                order.getCcExpiration(),
+                                order.getCcCVV(),
+                                order.getPlacedAt()));
 
-    GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
-    jdbcOperations.update(psc, keyHolder);
-    long tacoId = keyHolder.getKey().longValue();
-    taco.setId(tacoId);
+        // Capture generated order ID
+        GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbcOperations.update(psc, keyHolder);
+        long orderId = keyHolder.getKey().longValue();
+        order.setId(orderId);
 
-    saveIngredientRefs(tacoId, taco.getIngredients());
+        // Save each taco that belongs to this order
+        List<Taco> tacos = order.getTacos();
+        int i = 0;
+        for (Taco taco : tacos) {
+            saveTaco(orderId, i++, taco);
+        }
 
-    return tacoId;
-  }
-
-  private void saveIngredientRefs(
-      long tacoId, List<IngredientRef> ingredientRefs) {
-    int key = 0;
-    for (IngredientRef ingredientRef : ingredientRefs) {
-      jdbcOperations.update(
-          "insert into Ingredient_Ref (ingredient, taco, taco_key) "
-          + "values (?, ?, ?)",
-          ingredientRef.getIngredient(), tacoId, key++);
+        return order;
     }
-  }
 
-  @Override
-  public Optional<TacoOrder> findById(Long id) {
-    try {
-      TacoOrder order = jdbcOperations.queryForObject(
-          "select id, delivery_name, delivery_street, delivery_city, "
-              + "delivery_state, delivery_zip, cc_number, cc_expiration, "
-              + "cc_cvv, placed_at from Taco_Order where id=?",
-          (row, rowNum) -> {
-            TacoOrder tacoOrder = new TacoOrder();
-            tacoOrder.setId(row.getLong("id"));
-            tacoOrder.setDeliveryName(row.getString("delivery_name"));
-            tacoOrder.setDeliveryStreet(row.getString("delivery_street"));
-            tacoOrder.setDeliveryCity(row.getString("delivery_city"));
-            tacoOrder.setDeliveryState(row.getString("delivery_state"));
-            tacoOrder.setDeliveryZip(row.getString("delivery_zip"));
-            tacoOrder.setCcNumber(row.getString("cc_number"));
-            tacoOrder.setCcExpiration(row.getString("cc_expiration"));
-            tacoOrder.setCcCVV(row.getString("cc_cvv"));
-            tacoOrder.setPlacedAt(new Date(row.getTimestamp("placed_at").getTime()));
-            tacoOrder.setTacos(findTacosByOrderId(row.getLong("id")));
-            return tacoOrder;
-          }, id);
-      return Optional.of(order);
-    } catch (IncorrectResultSizeDataAccessException e) {
-      return Optional.empty();
+    // Saves a taco and links it to an order
+    private long saveTaco(Long orderId, int orderKey, Taco taco) {
+        taco.setCreatedAt(new Date());
+
+        PreparedStatementCreatorFactory pscf =
+                new PreparedStatementCreatorFactory(
+                        "insert into Taco "
+                                + "(name, created_at, taco_order, taco_order_key) "
+                                + "values (?, ?, ?, ?)",
+                        Types.VARCHAR, Types.TIMESTAMP, Types.BIGINT, Types.BIGINT
+                );
+        pscf.setReturnGeneratedKeys(true);
+
+        PreparedStatementCreator psc =
+                pscf.newPreparedStatementCreator(
+                        Arrays.asList(
+                                taco.getName(),
+                                taco.getCreatedAt(),
+                                orderId,
+                                orderKey));
+
+        // Save the taco and capture its auto-generated ID
+        GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
+        jdbcOperations.update(psc, keyHolder);
+        long tacoId = keyHolder.getKey().longValue();
+        taco.setId(tacoId);
+
+        // Save the taco ingredients
+        saveIngredientRefs(tacoId, taco.getIngredients());
+
+        return tacoId;
     }
-  }
 
-  private List<Taco> findTacosByOrderId(long orderId) {
-    return jdbcOperations.query(
-        "select id, name, created_at from Taco "
-        + "where taco_order=? order by taco_order_key",
-        (row, rowNum) -> {
-          Taco taco = new Taco();
-          taco.setId(row.getLong("id"));
-          taco.setName(row.getString("name"));
-          taco.setCreatedAt(new Date(row.getTimestamp("created_at").getTime()));
-          taco.setIngredients(findIngredientsByTacoId(row.getLong("id")));
-          return taco;
-        },
-        orderId);
-  }
+    // Saves each ingredient reference for a taco
+    private void saveIngredientRefs(long tacoId, List<IngredientRef> ingredientRefs) {
+        int key = 0;
+        for (IngredientRef ingredientRef : ingredientRefs) {
+            jdbcOperations.update(
+                    "insert into Ingredient_Ref (ingredient, taco, taco_key) "
+                            + "values (?, ?, ?)",
+                    ingredientRef.getIngredient(), tacoId, key++);
+        }
+    }
 
-  private List<IngredientRef> findIngredientsByTacoId(long tacoId) {
-    return jdbcOperations.query(
-        "select ingredient from Ingredient_Ref "
-        + "where taco = ? order by taco_key",
-        (row, rowNum) -> {
-          return new IngredientRef(row.getString("ingredient"));
-        },
-        tacoId);
-  }
+    @Override
+    public Optional<TacoOrder> findById(Long id) {
+        try {
+            // Query the Taco_Order row and map it to a TacoOrder object
+            TacoOrder order = jdbcOperations.queryForObject(
+                    "select id, delivery_name, delivery_street, delivery_city, "
+                            + "delivery_state, delivery_zip, cc_number, cc_expiration, "
+                            + "cc_cvv, placed_at from Taco_Order where id=?",
+                    (row, rowNum) -> {
+                        TacoOrder tacoOrder = new TacoOrder();
+                        tacoOrder.setId(row.getLong("id"));
+                        tacoOrder.setDeliveryName(row.getString("delivery_name"));
+                        tacoOrder.setDeliveryStreet(row.getString("delivery_street"));
+                        tacoOrder.setDeliveryCity(row.getString("delivery_city"));
+                        tacoOrder.setDeliveryState(row.getString("delivery_state"));
+                        tacoOrder.setDeliveryZip(row.getString("delivery_zip"));
+                        tacoOrder.setCcNumber(row.getString("cc_number"));
+                        tacoOrder.setCcExpiration(row.getString("cc_expiration"));
+                        tacoOrder.setCcCVV(row.getString("cc_cvv"));
+                        tacoOrder.setPlacedAt(new Date(row.getTimestamp("placed_at").getTime()));
+                        // Load all tacos connected to this order
+                        tacoOrder.setTacos(findTacosByOrderId(row.getLong("id")));
+                        return tacoOrder;
+                    },
+                    id);
+
+            return Optional.of(order);
+
+        } catch (IncorrectResultSizeDataAccessException e) {
+            // Return empty when no order is found
+            return Optional.empty();
+        }
+    }
+
+    // Finds all tacos that belong to an order
+    private List<Taco> findTacosByOrderId(long orderId) {
+        return jdbcOperations.query(
+                "select id, name, created_at from Taco "
+                        + "where taco_order=? order by taco_order_key",
+                (row, rowNum) -> {
+                    Taco taco = new Taco();
+                    taco.setId(row.getLong("id"));
+                    taco.setName(row.getString("name"));
+                    taco.setCreatedAt(new Date(row.getTimestamp("created_at").getTime()));
+                    taco.setIngredients(findIngredientsByTacoId(row.getLong("id")));
+                    return taco;
+                },
+                orderId);
+    }
+
+    // Finds all ingredient IDs for a taco
+    private List<IngredientRef> findIngredientsByTacoId(long tacoId) {
+        return jdbcOperations.query(
+                "select ingredient from Ingredient_Ref "
+                        + "where taco = ? order by taco_key",
+                (row, rowNum) -> {
+                    return new IngredientRef(row.getString("ingredient"));
+                },
+                tacoId);
+    }
 
 }
